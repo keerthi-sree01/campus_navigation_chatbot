@@ -1,11 +1,10 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template
 import re
-import speech_recognition as sr
-from gtts import gTTS
-import os
-import uuid
 import difflib
 import math
+import ollama
+import os
+import urllib.parse
 
 app = Flask(__name__)
 
@@ -23,7 +22,8 @@ campus_data = {
     "juice shop": {"lat": 17.06146, "lng": 81.86780, "description": "Juice and snack bar"},
     "food stalls": {"lat": 17.06141, "lng": 81.86795, "description": "Street food vendors"},
     "food court": {"lat": 17.06148, "lng": 81.86780, "description": "Main food court area"},
-    "mechanical labs": {"lat": 17.06434, "lng": 81.86737, "description": "Mechanical engineering laboratories"},
+    "Stationery shop": {"lat": 17.06153, "lng": 81.86790, "description": "Stationery and supplies store"},
+    "mechanical labs": {"lat": 17.06434, "lng": 81.86786, "description": "Mechanical engineering laboratories"},
     "boys mess": {"lat": 17.06179, "lng": 81.86716, "description": "Boys hostel dining hall"},
     "girls hostel": {"lat": 17.06202, "lng": 81.86674, "description": "Girls accommodation block"},
     "basketball court": {"lat": 17.06213, "lng": 81.86769, "description": "Basketball playing area"},
@@ -60,7 +60,7 @@ for name, data in campus_data.items():
     alias_mapping[name.lower()] = name
 
 # Precompute all location names for fuzzy matching
-all_location_names = list(campus_data.keys()) + [alias for aliases in [data.get("aliases", []) for data in campus_data.values()] for alias in aliases]
+all_location_names = list(campus_data.keys()) + list(alias_mapping.keys())
 
 def find_location(location_str):
     """Find location in database using name or alias with fuzzy matching"""
@@ -91,56 +91,243 @@ def find_location(location_str):
     return None
 
 def calculate_distance(start, end):
-    """Calculate approximate straight-line distance in meters"""
-    # Convert latitude and longitude differences to meters
-    lat_diff = abs(campus_data[start]['lat'] - campus_data[end]['lat']) * 111000
-    lng_diff = abs(campus_data[start]['lng'] - campus_data[end]['lng']) * 111000
-    return math.sqrt(lat_diff**2 + lng_diff**2)
+    """Calculate distance using Haversine formula (in meters)"""
+    # Convert decimal degrees to radians
+    lat1, lon1 = math.radians(campus_data[start]['lat']), math.radians(campus_data[start]['lng'])
+    lat2, lon2 = math.radians(campus_data[end]['lat']), math.radians(campus_data[end]['lng'])
+    
+    # Haversine formula
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    
+    # Radius of earth in meters (6371 km)
+    return 6371000 * c
 
 def generate_directions(start, end):
-    """Generate directions message with Google Maps link"""
+    """Generate detailed directions with properly formatted Google Maps link"""
+    if start == end:
+        return f"🚶 You're already at {start.capitalize()}!"
+    
     start_coords = f"{campus_data[start]['lat']},{campus_data[start]['lng']}"
-    start_name = start
-    
     end_coords = f"{campus_data[end]['lat']},{campus_data[end]['lng']}"
-    end_name = end
     
-    maps_url = f"https://www.google.com/maps/dir/{start_coords}/{end_coords}"
-    
-    distance = calculate_distance(start, end)
-    
-    # Add walking time estimate (4 km/h average walking speed)
-    walking_time = distance / 67  # 67 meters per minute
-    
-    # Generate directions description
-    description = (
-        f"🚶 Directions from {start_name.capitalize()} to {end_name.capitalize()}:\n"
-        f"📍 Distance: Approximately {distance:.0f} meters\n"
-        f"⏱️ Walking time: {max(1, int(walking_time))} minutes\n"
-        f"🗺️ [Open in Google Maps]({maps_url})"
+    # Properly formatted Google Maps URL
+    maps_url = (
+        f"https://www.google.com/maps/dir/?api=1&"
+        f"origin={start_coords}&"
+        f"destination={end_coords}&"
+        "travelmode=walking"
     )
     
-    # Add location description if available
+    distance = calculate_distance(start, end)
+    walking_time = distance / 67  # 67 meters per minute (average walking speed)
+    
+    # Create directions with steps
+    directions = [
+        f"🚶 Directions from {start.capitalize()} to {end.capitalize()}:",
+        f"📍 Distance: Approximately {distance:.0f} meters",
+        f"⏱️ Walking time: {max(1, int(walking_time))} minutes",
+        f"🗺️ [Open in Google Maps]({maps_url})"
+    ]
+    
+    # Add route guidance based on distance
+    if distance < 100:
+        directions.append(f"\n🔍 {end.capitalize()} is very close to {start.capitalize()} - you should see it nearby!")
+    else:
+        # Calculate bearing for cardinal direction
+        lat1 = math.radians(campus_data[start]['lat'])
+        lon1 = math.radians(campus_data[start]['lng'])
+        lat2 = math.radians(campus_data[end]['lat'])
+        lon2 = math.radians(campus_data[end]['lng'])
+        
+        y = math.sin(lon2-lon1) * math.cos(lat2)
+        x = math.cos(lat1)*math.sin(lat2) - math.sin(lat1)*math.cos(lat2)*math.cos(lon2-lon1)
+        bearing = math.degrees(math.atan2(y, x))
+        
+        # Convert bearing to cardinal direction
+        cardinals = ["North", "North-East", "East", "South-East", "South", "South-West", "West", "North-West"]
+        idx = round(bearing / 45) % 8
+        cardinal_dir = cardinals[idx]
+        
+        directions.append(f"\n🧭 Head {cardinal_dir} from {start.capitalize()}")
+    
+    # Add destination info
     if "description" in campus_data[end]:
-        description += f"\n\nℹ️ About this location: {campus_data[end]['description']}"
+        directions.append(f"\nℹ️ About this location: {campus_data[end]['description']}")
     
-    # Add hours if available
     if "hours" in campus_data[end]:
-        description += f"\n🕒 Hours: {campus_data[end]['hours']}"
+        directions.append(f"\n🕒 Hours: {campus_data[end]['hours']}")
     
-    return description
+    return "\n".join(directions)
+
+def get_food_locations():
+    """Return all food-related locations with emojis"""
+    food_spots = {
+        "food court": "🍽️ Main food court area",
+        "central food court": "🍕 Central dining area (CFC)",
+        "spicehub": "🌶️ SpiceHub food court",
+        "juice shop": "🍹 Juice and snack bar",
+        "food stalls": "🍢 Street food vendors",
+        "yummpys": "🍔 Yummpy's snack shop"
+    }
+    return "\n".join([f"- {name.capitalize()}: {desc}" for name, desc in food_spots.items()])
+
+def get_sports_locations():
+    """Return all sports facilities with emojis"""
+    sports = {
+        "basketball court": "🏀 Basketball playing area",
+        "football court": "⚽ Football/soccer field",
+        "cricket ground": "🏏 Cricket playing field",
+        "events ground": "🏟️ Events and festival ground"
+    }
+    return "\n".join([f"- {name.capitalize()}: {desc}" for name, desc in sports.items()])
+
+def get_prayer_locations():
+    """Return prayer locations with emojis"""
+    prayer = {
+        "saibaba temple": "🛕 Saibaba temple on campus",
+        "saraswati devi": "🙏 Saraswati Devi statue"
+    }
+    return "\n".join([f"- {name.capitalize()}: {desc}" for name, desc in prayer.items()])
+
+def generate_stationery_directions():
+    """Special function for stationery shop directions with proper link"""
+    start = "gate"
+    end = "Stationery shop"
+    
+    if end not in campus_data or start not in campus_data:
+        return "Couldn't find stationery shop location information."
+    
+    # Generate proper Google Maps URL
+    start_coords = f"{campus_data[start]['lat']},{campus_data[start]['lng']}"
+    end_coords = f"{campus_data[end]['lat']},{campus_data[end]['lng']}"
+    maps_url = (
+        f"https://www.google.com/maps/dir/?api=1&"
+        f"origin={start_coords}&"
+        f"destination={end_coords}&"
+        "travelmode=walking"
+    )
+    
+    distance = calculate_distance(start, end)
+    walking_time = distance / 67
+    
+    # Create detailed response
+    return (
+        "📚 You're looking for a place to buy a book! 📖\n\n"
+        "You can find the Stationery shop near the Main Block building 🔵. "
+        "It's a convenient spot to grab your favorite books, stationery supplies, and more! 🎉\n\n"
+        "Here are the step-by-step directions:\n\n"
+        "**From the Gate:**\n"
+        "1. Head towards the Globe monument 🌍\n"
+        "2. Turn left towards the Main Block building 🔵\n"
+        "3. Walk straight for about 150 meters 👣\n"
+        "4. You'll find the Stationery shop on your right-hand side 📚\n\n"
+        f"**Approximate distance:** {distance:.0f} meters 📍\n"
+        f"**Walking time:** {max(1, int(walking_time))} minutes ⏰\n\n"
+        f"🗺️ [Open in Google Maps]({maps_url})\n\n"
+        "Hope this helps! 😊"
+    )
+
+def has_whole_word(keywords, message):
+    return any(re.search(rf"\b{re.escape(word)}\b", message) for word in keywords)
+
+def process_special_queries(user_message):
+    """Handle special queries with strict keyword detection"""
+    user_message = user_message.lower()
+
+    # Stationery / Books
+    if has_whole_word(["book", "books", "stationery", "notebook", "pen", "pencil", "xerox", "photocopy", "buy book"], user_message):
+        return generate_stationery_directions()
+    
+    # Food
+    if has_whole_word(["food", "eat", "hungry", "restaurant", "canteen", "snack", "dine", "dining", "juice", "spicehub", "yummpy"], user_message):
+        return (
+            "🍴 Here are all food locations on campus:\n\n"
+            f"{get_food_locations()}\n\n"
+            "Ask 'How to get to [location]?' for directions to any of these!"
+        )
+    
+    # Prayer
+    if has_whole_word(["pray", "temple", "worship", "god", "religious", "statue", "saibaba", "saraswati"], user_message):
+        return (
+            "🙏 Here are prayer locations on campus:\n\n"
+            f"{get_prayer_locations()}\n\n"
+            "Ask for directions to any of these!"
+        )
+
+    # Sports
+    if has_whole_word(["play", "sports", "game", "basketball", "football", "cricket", "ground", "field", "court"], user_message):
+        return (
+            "🏅 Here are the sports facilities available on campus:\n\n"
+            f"{get_sports_locations()}\n\n"
+            "Ask for directions to any of these grounds!"
+        )
+
+    # Administrative / Fee / Transport Office
+    if has_whole_word(["fee", "fees", "administrative", "admin block", "principal", "transport office", "admission", "pay", "tc", "scholarship"], user_message):
+        return generate_directions("gate", "main block") + (
+            "\n\n🧾 The Administrative Block is in the **Main Block (Ground Floor)**. "
+            "You can visit here to:\n"
+            "- Pay fees 💰\n"
+            "- Submit transport or admission forms 🚌\n"
+            "- Meet the principal or officials 📋\n"
+        )
+
+    return None
+
+
+def generate_system_prompt():
+    """Generate system prompt with campus information for Llama"""
+    locations = "\n".join([f"- {name}: {data['description']}" for name, data in campus_data.items()])
+    
+    return (
+        "You are a navigation assistant for GIET University. "
+        "Use this campus location data to answer questions:\n\n"
+        f"{locations}\n\n"
+        "When asked for directions between two points, provide step-by-step directions, "
+        "approximate distance, and walking time. Always include a Google Maps link. "
+        "Format responses with emojis and clear sections. For location information, "
+        "provide description and nearby places. For campus map requests, provide a link. "
+        "Be friendly and helpful. If a question isn't about campus navigation, "
+        "politely decline to answer."
+    )
+
+def query_llama(user_message, conversation_history=[]):
+    """Query Llama model with campus context"""
+    system_prompt = generate_system_prompt()
+    
+    messages = [
+        {"role": "system", "content": system_prompt},
+        *conversation_history[-3:],
+        {"role": "user", "content": user_message}
+    ]
+    
+    try:
+        response = ollama.chat(
+            model='llama3',
+            messages=messages,
+            options={'temperature': 0.3}
+        )
+        return response['message']['content']
+    except Exception as e:
+        print(f"Llama error: {str(e)}")
+        return "I'm having trouble understanding. Could you please rephrase your question?"
 
 def process_message(user_message):
-    """Process user message and generate response"""
-    user_message = user_message.lower()
-    response = ""
-    
+    """Process user message with special handling for book/shopping queries"""
+    # First check for special queries
+    special_response = process_special_queries(user_message)
+    if special_response:
+        return special_response
+        
     # Patterns for different types of queries
     from_to_pattern = r'(?:from|between)\s+(.+?)\s+(?:to|and)\s+(.+)'
-    to_pattern = r'(?:to|for|towards|near)\s+(.+)'
-    where_pattern = r'(?:where\s+is|find|locate|show me|how to get to)\s+(.+)'
+    to_pattern = r'(?:to|for|towards|near|reach|get to|go to)\s+(.+)'
+    where_pattern = r'(?:where(\'s| is)|find|locate|show me|how to get to|directions? to)\s+(.+)'
     info_pattern = r'(?:info|information|details|about|tell me about)\s+(.+)'
-    help_pattern = r'(?:help|what can you do|options|features)'
+    help_pattern = r'(?:help|what can you do|options|features|commands)'
     map_pattern = r'(?:map|campus map|whole map|complete map)'
     simple_directions_pattern = r'(.+?)\s+to\s+(.+)'
     current_location_pattern = r'(?:where am i|my location|current location)'
@@ -150,44 +337,48 @@ def process_message(user_message):
     
     try:
         # Check for help request
-        if re.search(help_pattern, user_message):
-            response = (
+        if re.search(help_pattern, user_message, re.IGNORECASE):
+            return (
                 "🌟 I'm your campus navigation assistant! I can help with:\n"
-                "- Directions between locations (e.g., 'How to go from main block to library')\n"
-                "- Finding places (e.g., 'Where is the cafeteria?')\n"
-                "- Information about locations (e.g., 'Info about library')\n"
-                "- Campus map with all locations\n"
-                "You can also use voice commands by clicking the microphone icon!"
+                "- Directions between locations\n"
+                "- Finding places (food courts, sports grounds, temples)\n"
+                "- Information about locations\n"
+                "- Campus map with all locations\n\n"
+                "Try asking:\n"
+                "- 'Where can I buy books?'\n"
+                "- 'How to go to library?'\n"
+                "- 'Directions from gate to main block'\n"
+                "- 'Show me the campus map'"
             )
-            return response
         
         # Check for map request
-        if re.search(map_pattern, user_message):
-            # Create Google Maps URL with all locations as markers
-            markers = "&markers=".join([f"{data['lat']},{data['lng']}" for data in campus_data.values()])
-            map_url = f"https://www.google.com/maps/dir/?api=1&destination={list(campus_data.values())[0]['lat']},{list(campus_data.values())[0]['lng']}&travelmode=walking&waypoints={markers}"
-            
-            response = (
+        if re.search(map_pattern, user_message, re.IGNORECASE):
+            # Create Google Maps URL with all markers
+            markers = "&markers=" + "|".join([f"{data['lat']},{data['lng']}" for data in campus_data.values()])
+            map_url = f"https://www.google.com/maps?{markers}&q=17.05973,81.86922"
+            return (
                 "🗺️ Here's the complete campus map:\n"
                 f"📍 [View Campus Map on Google Maps]({map_url})\n\n"
                 "Key locations include:\n"
-                "- " + "\n- ".join([name.capitalize() for name in campus_data.keys()][:10]) + "\n...and more!"
+                "- " + "\n- ".join([name.capitalize() for name in list(campus_data.keys())[:10]]) + "\n...and more!"
             )
-            return response
         
         # Check for location information request
-        info_match = re.search(info_pattern, user_message)
-        if info_match:
+        if info_match := re.search(info_pattern, user_message, re.IGNORECASE):
             loc_str = info_match.group(1).strip()
             location = find_location(loc_str)
             
             if location and location in campus_data:
                 data = campus_data[location]
+                # Create direct Google Maps link
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={data['lat']},{data['lng']}"
+                
                 response = f"ℹ️ Information about {location.capitalize()}:\n"
                 response += f"- Description: {data['description']}\n"
+                response += f"- 📍 [View on Google Maps]({maps_url})\n"
+                
                 if "hours" in data:
                     response += f"- Hours: {data['hours']}\n"
-                response += f"- Coordinates: {data['lat']}, {data['lng']}\n"
                 
                 # Find nearby locations
                 nearby = []
@@ -202,193 +393,95 @@ def process_message(user_message):
                     for name, dist in sorted(nearby, key=lambda x: x[1])[:3]:
                         response += f"- {name.capitalize()} ({dist:.0f}m)\n"
             else:
-                response = f"❌ Sorry, I couldn't find information about '{loc_str}'. Try asking about specific campus locations."
+                response = f"❌ Sorry, I couldn't find information about '{loc_str}'"
             return response
         
         # Check for "where am I" request
-        if re.search(current_location_pattern, user_message):
-            response = (
+        if re.search(current_location_pattern, user_message, re.IGNORECASE):
+            # Create Google Maps URL with all markers
+            markers = "&markers=" + "|".join([f"{data['lat']},{data['lng']}" for data in campus_data.values()])
+            map_url = f"https://www.google.com/maps?{markers}&q=17.05973,81.86922"
+            return (
                 "📍 I can't determine your exact location, but here's the campus map:\n"
-                "🗺️ [View Campus Map on Google Maps](https://www.google.com/maps?q=17.05973,81.86922)\n\n"
-                "You can also ask:\n"
-                "- 'Directions to [place]' for navigation\n"
-                "- 'Where is [place]' to find a specific location"
+                f"🗺️ [View Campus Map on Google Maps]({map_url})\n\n"
+                "You can ask:\n"
+                "- 'Where is [place]' to find locations\n"
+                "- 'Directions to [place]' for navigation"
             )
-            return response
         
-        # Check for directions request patterns
-        # 1. Standard "from A to B" pattern
-        from_to_match = re.search(from_to_pattern, user_message)
-        if from_to_match:
-            start_str, end_str = from_to_match.groups()
-            start = find_location(start_str)
-            end = find_location(end_str)
-        
-        # 2. Simple "A to B" pattern
-        elif re.search(simple_directions_pattern, user_message):
-            match = re.search(simple_directions_pattern, user_message)
-            start_str, end_str = match.groups()
-            start = find_location(start_str)
-            end = find_location(end_str)
-        
-        # 3. "To B" pattern (from current location)
-        elif re.search(to_pattern, user_message):
-            match = re.search(to_pattern, user_message)
-            end_str = match.group(1)
-            # Use gate as default starting point
-            start = "gate"
-            end = find_location(end_str)
-        
-        # 4. Where pattern (single location query)
-        elif re.search(where_pattern, user_message):
-            match = re.search(where_pattern, user_message)
-            loc_str = match.group(1).strip()
+        # Check for "where is" request
+        if where_match := re.search(where_pattern, user_message, re.IGNORECASE):
+            # Handle different regex group positions
+            loc_str = where_match.group(2) if where_match.group(2) else where_match.group(1)
             location = find_location(loc_str)
+            
             if location and location in campus_data:
                 data = campus_data[location]
-                response = f"ℹ️ Information about {location.capitalize()}:\n"
+                # Create direct Google Maps link
+                maps_url = f"https://www.google.com/maps/search/?api=1&query={data['lat']},{data['lng']}"
+                
+                response = f"📍 {location.capitalize()} is located at:\n"
                 response += f"- Description: {data['description']}\n"
-                if "hours" in data:
-                    response += f"- Hours: {data['hours']}\n"
-                response += f"- Coordinates: {data['lat']}, {data['lng']}\n"
-                # Nearby locations logic
+                response += f"- 📍 [View on Google Maps]({maps_url})\n"
+                
+                # Find nearby locations
                 nearby = []
                 for other_name, other_data in campus_data.items():
                     if other_name != location:
                         dist = calculate_distance(location, other_name)
                         if dist < 200:  # within 200 meters
                             nearby.append((other_name, dist))
+                
                 if nearby:
                     response += "\n📍 Nearby locations:\n"
                     for name, dist in sorted(nearby, key=lambda x: x[1])[:3]:
                         response += f"- {name.capitalize()} ({dist:.0f}m)\n"
             else:
-                response = f"❌ Sorry, I couldn't find information about '{loc_str}'. Try asking about specific campus locations."
+                response = f"❌ Sorry, I couldn't find '{loc_str}'"
             return response
-    
+        
+        # Check for directions request patterns
+        if from_to_match := re.search(from_to_pattern, user_message, re.IGNORECASE):
+            start_str, end_str = from_to_match.groups()
+            start = find_location(start_str)
+            end = find_location(end_str)
+        elif simple_match := re.search(simple_directions_pattern, user_message, re.IGNORECASE):
+            start_str, end_str = simple_match.groups()
+            start = find_location(start_str)
+            end = find_location(end_str)
+        elif to_match := re.search(to_pattern, user_message, re.IGNORECASE):
+            end_str = to_match.group(1).strip()
+            start = "gate"  # Default to main gate as starting point
+            end = find_location(end_str)
+        
         # Generate directions if we have both points
         if start and end:
             if end not in campus_data:
-                response = f"❌ Sorry, I couldn't find '{end}' in campus locations."
-            elif start not in campus_data:
-                response = f"❌ Sorry, I couldn't find '{start}' in campus locations."
-            else:
-                response = generate_directions(start, end)
+                return f"❌ Sorry, I couldn't find '{end}'"
+            if start not in campus_data:
+                return f"❌ Sorry, I couldn't find '{start}'"
+            return generate_directions(start, end)
                 
-        else:  # No pattern matched
-            response = (
-                "🤔 I'm not sure what you're asking. I can help with:\n"
-                "- Directions (e.g., 'How to go from main block to library' or 'gate to library')\n"
-                "- Finding places (e.g., 'Where is the cafeteria?')\n"
-                "- Information about locations (e.g., 'Info about library')\n"
-                "- Campus map (say 'show map')\n"
-                "Try one of these or say 'help' for options."
-            )
+        # No pattern matched - use Llama
+        return query_llama(user_message)
     
     except Exception as e:
-        response = f"❌ Sorry, I encountered an error: {str(e)}. Please try again."
-    
-    return response
-
-def text_to_speech(text, lang='en'):
-    """Convert text to speech and return the audio file path"""
-    # Create audio directory if not exists
-    audio_dir = "audio_files"
-    if not os.path.exists(audio_dir):
-        os.makedirs(audio_dir)
-    
-    filename = f"{audio_dir}/response_{uuid.uuid4()}.mp3"
-    tts = gTTS(text=text, lang=lang, slow=False)
-    tts.save(filename)
-    return filename
-
-def speech_to_text(audio_file):
-    """Convert speech to text using Google Speech Recognition with enhanced settings"""
-    recognizer = sr.Recognizer()
-    recognizer.dynamic_energy_threshold = True
-    recognizer.pause_threshold = 0.8
-    
-    with sr.AudioFile(audio_file) as source:
-        try:
-            # Adjust for ambient noise
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data, language='en-IN')
-            return text
-        except sr.UnknownValueError:
-            return "Could not understand audio"
-        except sr.RequestError as e:
-            return f"Speech recognition error: {e}"
-        except Exception as e:
-            return f"Audio processing error: {str(e)}"
+        return f"❌ Sorry, I encountered an error: {str(e)}"
 
 @app.route('/')
 def home():
-    """Render the chatbot interface"""
     return render_template('index.html')
 
 @app.route('/chat', methods=['POST'])
 def chat_handler():
-    """Handle text-based chat requests"""
     user_message = request.json['message']
     response = process_message(user_message)
     return jsonify({"response": response})
 
-@app.route('/voice', methods=['POST'])
-def voice_handler():
-    """Handle voice input and return voice response"""
-    if 'audio' not in request.files:
-        return jsonify({"error": "No audio file provided"}), 400
-        
-    audio_file = request.files['audio']
-    temp_dir = "temp_audio"
-    if not os.path.exists(temp_dir):
-        os.makedirs(temp_dir)
-        
-    temp_audio = f"{temp_dir}/input_{uuid.uuid4()}.wav"
-    audio_file.save(temp_audio)
-    
-    # Convert speech to text
-    user_message = speech_to_text(temp_audio)
-    os.remove(temp_audio)  # Clean up temp file
-    
-    # Process the message
-    response_text = process_message(user_message)
-    
-    # Convert response to speech
-    audio_filename = text_to_speech(response_text)
-    
-    # Return relative path without directory for client
-    audio_url = audio_filename.replace("audio_files/", "")
-    
-    return jsonify({
-        "user_message": user_message,
-        "response": response_text,
-        "audio_url": f"/audio/{audio_url}"
-    })
-
-@app.route('/audio/<path:filename>')
-def get_audio(filename):
-    """Serve generated audio files"""
-    return send_file(f"audio_files/{filename}", mimetype='audio/mpeg')
-
 @app.route('/map')
 def campus_map():
-    """Return campus map data"""
     return jsonify(campus_data)
 
 if __name__ == '__main__':
-    # Create necessary directories
-    for dir in ["audio_files", "temp_audio"]:
-        if not os.path.exists(dir):
-            os.makedirs(dir)
-    
-    # Clean up old audio files on startup
-    for file in os.listdir('audio_files'):
-        if file.endswith('.mp3'):
-            try:
-                os.remove(f"audio_files/{file}")
-            except:
-                pass
-                
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port, debug=False)
