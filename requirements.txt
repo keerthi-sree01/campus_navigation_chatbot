@@ -2,3 +2,5 @@ Flask
 gunicorn
 SpeechRecognition
 gtts
+requests
+ollama
