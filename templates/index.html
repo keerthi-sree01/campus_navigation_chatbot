@@ -3,16 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Campus Navigation Assistant</title>
+    <title>GGU Campus Navigation Assistant</title>
     <style>
         :root {
-            --primary: #4e73df;
-            --secondary: #858796;
-            --success: #1cc88a;
-            --info: #36b9cc;
+            --primary: #fdfeff;
+            --secondary: #ca2b2b;
+            --success: #070504;
+            --info: #be2525;
             --warning: #f6c23e;
             --danger: #e74a3b;
-            --light: #f8f9fc;
+            --light: #f6f8ff;
             --dark: #5a5c69;
         }
         
@@ -32,15 +32,33 @@
         .container {
             max-width: 900px;
             margin: 0 auto;
-            background: white;
+            background: rgb(103, 16, 16);
             border-radius: 15px;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
             overflow: hidden;
         }
+        .bot-message .message-bubble {
+    background: white !important;
+    color: black !important;   /* Fix all normal text */
+    border: 1px solid #e3e6f0;
+    border-bottom-left-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+}
+
+/* Make ALL links inside bot messages blue and underlined */
+.bot-message .message-bubble a {
+    color: blue !important;
+    text-decoration: underline !important;
+}
+
+/* Make visited links a different color (optional) */
+.bot-message .message-bubble a:visited {
+    color: purple !important;
+}
         
         header {
             background: var(--primary);
-            color: white;
+            color: rgb(214, 21, 21);
             padding: 20px;
             text-align: center;
             position: relative;
@@ -100,16 +118,16 @@
         
         .user-message .message-bubble {
             background: var(--primary);
-            color: white;
+            color: rgb(23, 21, 21);
             border-bottom-right-radius: 5px;
         }
         
         .bot-message .message-bubble {
-            background: white;
+            background: rgb(255, 255, 255);
             color: var(--dark);
             border: 1px solid #e3e6f0;
             border-bottom-left-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
         }
         
         .bot-message .message-bubble a {
@@ -148,14 +166,14 @@
             border: none;
             border-radius: 30px;
             background: var(--primary);
-            color: white;
+            color: rgb(253, 249, 249);
             cursor: pointer;
             font-weight: 600;
             transition: background 0.3s;
         }
         
-        button:hover {
-            background: #2e59d9;
+        button{
+            background: #010205;
         }
         
         .voice-btn {
@@ -301,9 +319,43 @@ body, html {
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>Campus Navigation Assistant</h1>
+        <!-- <header>
+            <h1> GIET Campus Navigation Assistant</h1>
             <p>Your guide to navigating the college campus</p>
+        </header> -->
+        <!-- <header>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <img src="https://www.facebook.com/images/fb_icon_325x325.png" alt="GIET Logo" style="width: 50px; height: 50px; border-radius: 10px;">
+                    <div>
+                        <h1>GIET Campus Navigation Assistant</h1>
+                        <p>Your guide to navigating the college campus</p>
+                    </div>
+                </div>
+            </div>
+        </header> -->
+        <!-- <header>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div>
+                    <h1>GIET Campus Navigation Assistant</h1>
+                    <p>Your guide to navigating the college campus</p>
+                </div>
+                <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTwGYuvgnY2F1U9PsUt2jV5L4qAZIgB8lvUXA&s" 
+                     alt="GIET Logo" 
+                     style="width: 50px; height: 50px; border-radius: 10px;">
+            </div>
+        </header> -->
+        <header>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <div style="text-align: left;">
+                    <h1 style="margin: 0;">GGU Campus Navigation Assistant</h1>
+                    <p style="margin: 0;">Your guide to navigating the college campus</p>
+                </div>
+                <img src="{{ url_for('static', filename='images/giet.jpeg') }}"
+     alt="GGU Logo"
+     style="width: 250px; height: 100px; object-fit: contain; border-radius: 20px;">
+        
+            </div>
         </header>
         
         <div class="campus-info">
@@ -313,7 +365,7 @@ body, html {
         <div class="chat-container" id="chat-container">
             <div class="message bot-message">
                 <div class="message-bubble">
-                    🎓 Welcome to Campus Navigation Assistant!<br><br>
+                    🎓 Welcome to GIET Campus Navigation Assistant!<br><br>
                     I can help you with:<br>
                     - Directions between locations<br>
                     - Finding campus facilities<br>
@@ -326,8 +378,8 @@ body, html {
         
         <div class="suggestions">
             <div class="suggestion" onclick="sendSuggestion('Where is the library?')">Where is the library?</div>
-            <div class="suggestion" onclick="sendSuggestion('How to go from gate to food court')">Gate to Food Court</div>
-            <div class="suggestion" onclick="sendSuggestion('Info about amphitheatre')">Amphitheatre Info</div>
+            <!-- <div class="suggestion" onclick="sendSuggestion('How to go from gate to food court')">Gate to Food Court</div> -->
+            <!-- <div class="suggestion" onclick="sendSuggestion('Info about amphitheatre')">Amphitheatre Info</div> -->
             <div class="suggestion" onclick="sendSuggestion('Show campus map')">Campus Map</div>
         </div>
         
